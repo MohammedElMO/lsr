@@ -2,9 +2,13 @@ name: Release Crate + CLI(lsr)
 
 on:
   push:
-    tags: ['v*']
-    branches: [ main ]
-    paths: [ 'Cargo.toml' ]
+    tags:
+      - 'v*'
+    branches:
+      - main
+    paths:
+      - 'Cargo.toml'
+
 
 
 jobs:
