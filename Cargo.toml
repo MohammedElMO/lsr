@@ -1,0 +1,27 @@
+[package]
+name = "lsr"
+version = "0.1.0"
+edition = "2024"
+authors = ["Your Name <email@example.com>"]
+description = "A hello world CLI tool with Rust and Node.js bindings"
+license = "MIT"
+repository = "https://github.com/yourusername/lsr"
+keywords = ["cli", "hello", "rust", "napi"]
+
+# This is crucial - cdylib for Node.js, rlib for Rust crates
+[lib]
+name = "lsr"
+path = "src/lib.rs"
+
+# CLI binary
+[[bin]]
+name = "lsr"
+path = "src/cli/main.rs"
+
+[dependencies]
+clap = { version = "4.5.45", features = ["derive"] }
+
+
+# Make sure the binary is installable via cargo install
+[package.metadata.docs.rs]
+all-features = true
