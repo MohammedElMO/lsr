@@ -6,6 +6,53 @@ on:
   pull_request:
     branches: [ main, develop ]
 
+#jobs:
+#  test:
+#    strategy:
+#      matrix:
+#        os: [ubuntu-latest, windows-latest, macos-latest]
+#
+#    runs-on: ${{ matrix.os }}
+#
+#    steps:
+#      - uses: actions/checkout@v4
+#
+#      - name: Setup Rust
+#        uses: dtolnay/rust-toolchain@stable
+#
+#      - name: Cache dependencies
+#        uses: actions/cache@v3
+#        with:
+#          path: |
+#            ~/.cargo/registry
+#            ~/.cargo/git
+#            target
+#          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+#
+#      - name: Run tests
+#        run: cargo test --verbose
+#
+#      - name: Build binary
+#        run: cargo build --release
+#
+#
+#  lint:
+#    runs-on: ubuntu-latest
+#
+#    steps:
+#      - uses: actions/checkout@v4
+#
+#      - name: Setup Rust
+#        uses: dtolnay/rust-toolchain@stable
+#        with:
+#          components: rustfmt, clippy
+#
+#      - name: Check formatting
+#        run: cargo fmt -- --check
+#
+#      - name: Run clippy
+#        run: cargo clippy -- -D warnings
+
 jobs:
   test:
     strategy:
@@ -17,38 +64,111 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache dependencies
+      # Cache 1: Rust toolchain installation
+      - name: Cache Rust toolchain
         uses: actions/cache@v3
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+            ~/.rustup/toolchains
+            ~/.rustup/update-hashes
+            ~/.rustup/settings.toml
+          key: rust-toolchain-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'rust-toolchain', '.github/workflows/test.yml') }}
+          restore-keys: rust-toolchain-${{ runner.os }}-
+
+      - name: Setup Rust (with cache)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # Cache 2: Cargo registry and git dependencies
+      - name: Cache Cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+
+      # Cache 3: Build artifacts (target directory)
+      - name: Cache build artifacts
+        uses: actions/cache@v3
+        with:
+          path: target
+          key: cargo-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml', 'src/**', 'tests/**') }}
+          restore-keys: |
+            cargo-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+            cargo-build-${{ runner.os }}-
+
+      # Cache 4: Installed cargo tools
+      - name: Cache cargo tools
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/bin
+          key: cargo-tools-${{ runner.os }}-${{ hashFiles('.github/workflows/test.yml') }}
+          restore-keys: cargo-tools-${{ runner.os }}-
+
+      # Now the actual work (super fast with cache)
+      - name: Check formatting
+        run: cargo fmt -- --check
+
+      - name: Run clippy
+        run: cargo clippy -- -D warnings
 
       - name: Run tests
         run: cargo test --verbose
 
-      - name: Build binary
+      - name: Build release binary
         run: cargo build --release
 
+      - name: Test CLI functionality
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            ./target/release/lsr.exe --version
+            ./target/release/lsr.exe TestUser
+          else
+            ./target/release/lsr --version  
+            ./target/release/lsr TestUser
+          fi
 
-  lint:
+  # Separate quick job for basic checks (runs in parallel)
+  quick-check:
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
+
+      # Use same caching strategy
+      - name: Cache Rust toolchain
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.rustup/toolchains
+            ~/.rustup/update-hashes
+            ~/.rustup/settings.toml
+          key: rust-toolchain-ubuntu-latest-${{ hashFiles('rust-toolchain.toml', 'rust-toolchain', '.github/workflows/test.yml') }}
+          restore-keys: rust-toolchain-ubuntu-latest-
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
-      - name: Check formatting
-        run: cargo fmt -- --check
+      - name: Cache Cargo
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: quick-check-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: quick-check-
 
-      - name: Run clippy
-        run: cargo clippy -- -D warnings
+      - name: Quick compile check
+        run: cargo check --all-targets
+
+      - name: Documentation check
+        run: cargo doc --no-deps --document-private-items
