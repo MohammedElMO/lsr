@@ -1,5 +1,4 @@
 use clap::Parser;
-use std::process::exit;
 // Import functions from our library
 
 use lsr::core::hello::*;
