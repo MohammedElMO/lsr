@@ -1,4 +1,3 @@
-
 use lsr::core::hello::hello;
 
 #[test]

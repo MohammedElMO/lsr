@@ -1,5 +1,5 @@
-use std::process::exit;
 use clap::Parser;
+use std::process::exit;
 // Import functions from our library
 
 use lsr::core::hello::*;
@@ -21,11 +21,9 @@ fn main() {
     let cli = Cli::parse();
     if cli.hello {
         println!("lsr  {}", hello());
-
     }
     match cli.name {
         Some(_) => println!("{}", hello()),
-        None => exit(0)
+        None => println!("no"),
     }
-
 }
