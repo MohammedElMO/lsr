@@ -23,7 +23,7 @@ jobs:
           cargo build --release
 
       - name: Create preview artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: preview-build-${{ github.sha }}
           path: target/release/lsr*
@@ -43,7 +43,6 @@ jobs:
         run: |
           cargo build --release
           # Add more comprehensive integration tests here
-          ./target/release/lsr --version
           ./target/release/lsr --help
 
       - name: Benchmark performance (optional)

@@ -7,53 +7,6 @@ on:
     branches: [ main, develop ]
   workflow_call:
 
-#jobs:
-#  test:
-#    strategy:
-#      matrix:
-#        os: [ubuntu-latest, windows-latest, macos-latest]
-#
-#    runs-on: ${{ matrix.os }}
-#
-#    steps:
-#      - uses: actions/checkout@v4
-#
-#      - name: Setup Rust
-#        uses: dtolnay/rust-toolchain@stable
-#
-#      - name: Cache dependencies
-#        uses: actions/cache@v3
-#        with:
-#          path: |
-#            ~/.cargo/registry
-#            ~/.cargo/git
-#            target
-#          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-#
-#      - name: Run tests
-#        run: cargo test --verbose
-#
-#      - name: Build binary
-#        run: cargo build --release
-#
-#
-#  lint:
-#    runs-on: ubuntu-latest
-#
-#    steps:
-#      - uses: actions/checkout@v4
-#
-#      - name: Setup Rust
-#        uses: dtolnay/rust-toolchain@stable
-#        with:
-#          components: rustfmt, clippy
-#
-#      - name: Check formatting
-#        run: cargo fmt -- --check
-#
-#      - name: Run clippy
-#        run: cargo clippy -- -D warnings
-
 jobs:
   test:
     strategy:
@@ -65,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Cache 1: Rust toolchain installation
+      # Simplified cache without non-existent files
       - name: Cache Rust toolchain
         uses: actions/cache@v3
         with:
@@ -73,7 +26,7 @@ jobs:
             ~/.rustup/toolchains
             ~/.rustup/update-hashes
             ~/.rustup/settings.toml
-          key: rust-toolchain-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'rust-toolchain', '.github/workflows/test.yml') }}
+          key: rust-toolchain-${{ runner.os }}-stable
           restore-keys: rust-toolchain-${{ runner.os }}-
 
       - name: Setup Rust (with cache)
@@ -103,14 +56,6 @@ jobs:
             cargo-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
             cargo-build-${{ runner.os }}-
 
-      # Cache 4: Installed cargo tools
-      - name: Cache cargo tools
-        uses: actions/cache@v3
-        with:
-          path: ~/.cargo/bin
-          key: cargo-tools-${{ runner.os }}-${{ hashFiles('.github/workflows/test.yml') }}
-          restore-keys: cargo-tools-${{ runner.os }}-
-
       # Now the actual work (super fast with cache)
       - name: Check formatting
         run: cargo fmt -- --check
@@ -124,7 +69,6 @@ jobs:
       - name: Build release binary
         run: cargo build --release
 
-
   # Separate quick job for basic checks (runs in parallel)
   lint:
     runs-on: ubuntu-latest
@@ -132,7 +76,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Use same caching strategy
+      # Simplified cache
       - name: Cache Rust toolchain
         uses: actions/cache@v3
         with:
@@ -140,7 +84,7 @@ jobs:
             ~/.rustup/toolchains
             ~/.rustup/update-hashes
             ~/.rustup/settings.toml
-          key: rust-toolchain-ubuntu-latest-${{ hashFiles('rust-toolchain.toml', 'rust-toolchain', '.github/workflows/test.yml') }}
+          key: rust-toolchain-ubuntu-latest-stable
           restore-keys: rust-toolchain-ubuntu-latest-
 
       - name: Setup Rust
