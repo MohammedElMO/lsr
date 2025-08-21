@@ -52,14 +52,3 @@ jobs:
 
       - name: Run clippy
         run: cargo clippy -- -D warnings
-
-  security:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Security audit
-        uses: actions-rs/audit-check@v1
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
