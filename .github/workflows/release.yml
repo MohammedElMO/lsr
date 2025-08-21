@@ -4,84 +4,28 @@ on:
   push:
     tags:
       - 'v*'
-    branches:
-      - main
-    paths:
-      - 'Cargo.toml'
 
 jobs:
-  # Only run if this is a version tag or main branch with version bump
-  check-version:
-    runs-on: ubuntu-latest
-    outputs:
-      should_release: ${{ steps.check.outputs.should_release }}
-      version: ${{ steps.check.outputs.version }}
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 2  # Need at least 2 commits for git diff
-
-      - name: Check if should release
-        id: check
-        run: |
-          if [[ $GITHUB_REF == refs/tags/v* ]]; then
-            echo "should_release=true" >> $GITHUB_OUTPUT
-            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-          elif [[ $GITHUB_REF == refs/heads/main ]]; then
-            # Check if Cargo.toml version changed in this commit (with safety check)
-            if git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
-              if git diff HEAD~1 HEAD --name-only | grep -q "Cargo.toml"; then
-                VERSION=$(grep '^version = ' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
-                echo "should_release=true" >> $GITHUB_OUTPUT
-                echo "version=v$VERSION" >> $GITHUB_OUTPUT
-              else
-                echo "should_release=false" >> $GITHUB_OUTPUT
-              fi
-            else
-              # First commit or shallow checkout - check if it's a version bump commit
-              if git log --oneline -1 | grep -i "bump\|version\|release"; then
-                VERSION=$(grep '^version = ' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
-                echo "should_release=true" >> $GITHUB_OUTPUT
-                echo "version=v$VERSION" >> $GITHUB_OUTPUT
-              else
-                echo "should_release=false" >> $GITHUB_OUTPUT
-              fi
-            fi
-          else
-            echo "should_release=false" >> $GITHUB_OUTPUT
-          fi
-
   test:
     uses: ./.github/workflows/test.yml
 
   build-release:
-    needs: [check-version, test]
-    if: needs.check-version.outputs.should_release == 'true'
-
+    needs: test
     strategy:
       matrix:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             suffix: ""
-            archive_cmd: "tar czf"
-            archive_ext: "tar.gz"
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             suffix: ".exe"
-            archive_cmd: "7z a -tzip"
-            archive_ext: "zip"
           - os: macos-latest
             target: x86_64-apple-darwin
             suffix: ""
-            archive_cmd: "tar czf"
-            archive_ext: "tar.gz"
           - os: macos-latest
             target: aarch64-apple-darwin
             suffix: ""
-            archive_cmd: "tar czf"
-            archive_ext: "tar.gz"
 
     runs-on: ${{ matrix.os }}
 
@@ -94,8 +38,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build optimized binary
-        run: |
-          cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Strip binary (Unix)
         if: matrix.os != 'windows-latest'
@@ -104,22 +47,34 @@ jobs:
       - name: Create release archive
         shell: bash
         run: |
-          cd target/${{ matrix.target }}/release
+          # Create archive in root directory
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            7z a ../../../lsr-${{ matrix.target }}.${{ matrix.archive_ext }} lsr.exe
+            cd target/${{ matrix.target }}/release
+            7z a ../../../lsr-${{ matrix.target }}.zip lsr.exe
+            cd ../../..
           else
-            tar czf ../../../lsr-${{ matrix.target }}.${{ matrix.archive_ext }} lsr
+            cd target/${{ matrix.target }}/release
+            tar czf ../../../lsr-${{ matrix.target }}.tar.gz lsr
+            cd ../../..
+          fi
+          
+          # Verify file exists
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            ls -la lsr-${{ matrix.target }}.zip
+          else
+            ls -la lsr-${{ matrix.target }}.tar.gz
           fi
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.target }}
-          path: lsr-${{ matrix.target }}.${{ matrix.archive_ext }}
+          path: |
+            lsr-${{ matrix.target }}.tar.gz
+            lsr-${{ matrix.target }}.zip
 
   publish-crate:
-    needs: [check-version, test]
-    if: needs.check-version.outputs.should_release == 'true'
+    needs: test
     runs-on: ubuntu-latest
 
     steps:
@@ -132,7 +87,7 @@ jobs:
         run: cargo publish --token ${{ secrets.CARGO_TOKEN }}
 
   create-github-release:
-    needs: [check-version, build-release, publish-crate]
+    needs: [build-release, publish-crate]
     runs-on: ubuntu-latest
 
     steps:
@@ -143,19 +98,18 @@ jobs:
         with:
           path: artifacts/
 
+      - name: List artifacts (debug)
+        run: find artifacts/ -type f -ls
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ needs.check-version.outputs.version }}
-          name: Release ${{ needs.check-version.outputs.version }}
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
           draft: false
           prerelease: false
           files: artifacts/**/*
           body: |
-            ## What's Changed
-            
-            * See [CHANGELOG.md](CHANGELOG.md) for detailed changes
-            
             ## Installation
             
             ### Via Cargo
@@ -164,7 +118,11 @@ jobs:
             ```
             
             ### Download Binary
-            Download the appropriate binary for your platform from the assets below.
+            Download the appropriate binary for your platform from the assets below:
+            - **Linux**: `lsr-x86_64-unknown-linux-gnu.tar.gz`
+            - **Windows**: `lsr-x86_64-pc-windows-msvc.zip`  
+            - **macOS Intel**: `lsr-x86_64-apple-darwin.tar.gz`
+            - **macOS M1/M2**: `lsr-aarch64-apple-darwin.tar.gz`
 
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
