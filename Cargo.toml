@@ -1,6 +1,6 @@
 [package]
 name = "lsr"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 authors = ["Your Name <email@example.com>"]
 description = "A hello world CLI tool with Rust and Node.js bindings"
