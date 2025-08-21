@@ -1,5 +1,5 @@
 [package]
-name = "lsr"
+name = "lsr_mo"
 version = "0.2.2"
 edition = "2024"
 authors = ["Your Name <email@example.com>"]
