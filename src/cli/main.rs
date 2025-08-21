@@ -38,5 +38,4 @@ fn main() {
     match cli.command {
         Commands::Sayhi => say_hi(),
     }
-
 }
