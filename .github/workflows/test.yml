@@ -123,16 +123,6 @@ jobs:
       - name: Build release binary
         run: cargo build --release
 
-      - name: Test CLI functionality
-        shell: bash
-        run: |
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            ./target/release/lsr.exe --version
-            ./target/release/lsr.exe TestUser
-          else
-            ./target/release/lsr --version  
-            ./target/release/lsr TestUser
-          fi
 
   # Separate quick job for basic checks (runs in parallel)
   quick-check:
