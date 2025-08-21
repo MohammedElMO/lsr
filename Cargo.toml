@@ -2,7 +2,7 @@
 name = "lsr_mo"
 version = "0.1.0"
 edition = "2024"
-authors = ["Your Name <email@example.com>"]
+authors = ["Mohammed, Amrani amranimohamad040@gmail.com"]
 description = "A hello world CLI tool with Rust and Node.js bindings"
 license = "MIT"
 repository = "https://github.com/yourusername/lsr"
