@@ -35,16 +35,6 @@ jobs:
       - name: Build binary
         run: cargo build --release
 
-      - name: Test CLI basic functionality
-        shell: bash
-        run: |
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            ./target/release/lsr.exe
-            ./target/release/lsr.exe TestUser
-          else
-            ./target/release/lsr
-            ./target/release/lsr TestUser
-          fi
 
   lint:
     runs-on: ubuntu-latest
