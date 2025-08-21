@@ -6,7 +6,7 @@ authors = ["Mohammed, Amrani amranimohamad040@gmail.com"]
 description = "A hello world CLI tool with Rust and Node.js bindings"
 license = "MIT"
 repository = "https://github.com/yourusername/lsr"
-keywords = ["cli", "hello", "rust", "napi"]
+keywords = ["cli","npm", "rust", "napi"]
 
 # This is crucial - cdylib for Node.js, rlib for Rust crates
 [lib]
