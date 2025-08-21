@@ -125,7 +125,7 @@ jobs:
 
 
   # Separate quick job for basic checks (runs in parallel)
-  quick-check:
+  lint:
     runs-on: ubuntu-latest
 
     steps:
