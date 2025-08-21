@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
 // Import functions from our library
 
 use lsr::core::hello::*;
@@ -14,6 +14,15 @@ struct Cli {
     /// Show version
     #[arg(short, long)]
     version: bool,
+
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Runs the hello function
+    Sayhi,
 }
 
 fn main() {
@@ -25,4 +34,9 @@ fn main() {
         Some(_) => println!("{}", hello()),
         None => println!("no"),
     }
+
+    match cli.command {
+        Commands::Sayhi => say_hi(),
+    }
+
 }
