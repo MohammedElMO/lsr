@@ -1,0 +1,60 @@
+name: PR Validation
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
+  validate-pr:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Get full history for proper diff
+
+      - name: Check PR title format
+        run: |
+          # Ensure PR titles follow conventional commits
+          if [[ "${{ github.event.pull_request.title }}" =~ ^(feat|fix|docs|style|refactor|test|chore)(\(.+\))?: .+ ]]; then
+            echo "✅ PR title follows conventional commits format"
+          else
+            echo "❌ PR title must follow format: type(scope): description"
+            echo "Examples: feat: add ls -l support, fix(cli): handle empty directory"
+            exit 1
+          fi
+
+      - name: Check for version bump (if main branch)
+        if: github.event.pull_request.base.ref == 'main'
+        run: |
+          if git diff origin/main HEAD --name-only | grep -q "Cargo.toml"; then
+            echo "✅ Version bump detected"
+          else
+            echo "⚠️  No version bump detected for main branch PR"
+            echo "Please update version in Cargo.toml"
+            exit 1
+          fi
+
+  code-coverage:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-tarpaulin
+        run: cargo install cargo-tarpaulin
+
+      - name: Generate code coverage
+        run: cargo tarpaulin --verbose --all-features --workspace --timeout 120 --out Xml
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./cobertura.xml
+          fail_ci_if_error: true

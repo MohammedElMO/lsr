@@ -2,13 +2,17 @@ name: Test Crate + CLI(lsr)
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, develop, 'feature/*', 'release/*', 'hotfix/*' ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, develop ]
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
@@ -16,12 +20,56 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
       - name: Run tests
         run: cargo test --verbose
 
       - name: Build binary
         run: cargo build --release
 
-      - name: Test CLI
+      - name: Test CLI basic functionality
+        shell: bash
         run: |
-          ./target/release/lsr
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            ./target/release/lsr.exe
+            ./target/release/lsr.exe TestUser
+          else
+            ./target/release/lsr
+            ./target/release/lsr TestUser
+          fi
+
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check formatting
+        run: cargo fmt -- --check
+
+      - name: Run clippy
+        run: cargo clippy -- -D warnings
+
+  security:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Security audit
+        uses: actions-rs/audit-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
