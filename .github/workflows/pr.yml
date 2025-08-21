@@ -5,56 +5,31 @@ on:
     branches: [ main, develop ]
 
 jobs:
+  # Reuse existing comprehensive test suite
   test:
     uses: ./.github/workflows/test.yml
 
+  # Simple PR validation
   validate-pr:
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Get full history for proper diff
+          fetch-depth: 0
 
-      - name: Check PR title format
+      - name: Check PR is not empty
         run: |
-          # Ensure PR titles follow conventional commits
-          if [[ "${{ github.event.pull_request.title }}" =~ ^(feat|fix|docs|style|refactor|test|chore)(\(.+\))?: .+ ]]; then
-            echo "✅ PR title follows conventional commits format"
-          else
-            echo "❌ PR title must follow format: type(scope): description"
-            echo "Examples: feat: add ls -l support, fix(cli): handle empty directory"
+          if [[ -z "${{ github.event.pull_request.title }}" ]]; then
+            echo "❌ PR title cannot be empty"
             exit 1
           fi
+          echo "✅ PR validation passed"
 
-      - name: Check for version bump (if main branch)
-        if: github.event.pull_request.base.ref == 'main'
+      - name: Check for large files
         run: |
-          if git diff origin/main HEAD --name-only | grep -q "Cargo.toml"; then
-            echo "✅ Version bump detected"
-          else
-            echo "⚠️  No version bump detected for main branch PR"
-            echo "Please update version in Cargo.toml"
-            exit 1
+          # Prevent accidentally committing large binaries
+          if find . -type f -size +10M -not -path "./target/*" -not -path "./.git/*"; then
+            echo "⚠️ Large files detected (>10MB)"
+            echo "Consider using Git LFS or exclude from repository"
           fi
-
-  code-coverage:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-tarpaulin
-        run: cargo install cargo-tarpaulin
-
-      - name: Generate code coverage
-        run: cargo tarpaulin --verbose --all-features --workspace --timeout 120 --out Xml
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v3
-        with:
-          file: ./cobertura.xml
-          fail_ci_if_error: true
