@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'
 
+# Add permissions for the workflow
+permissions:
+  contents: write  # Required to create releases
+  packages: write  # Optional: for package publishing
+
 jobs:
   test:
     uses: ./.github/workflows/test.yml
@@ -125,4 +130,4 @@ jobs:
             - **macOS M1/M2**: `lsr-aarch64-apple-darwin.tar.gz`
 
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}  # Use PAT if permissions don't work
