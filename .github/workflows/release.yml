@@ -63,21 +63,46 @@ jobs:
             ${{ runner.os }}-${{ matrix.target }}-cargo-
             ${{ runner.os }}-cargo-
 
+      - name: Get expected binary name
+        id: expected_binary
+        shell: bash
+        run: |
+          echo "=== Extracting binary name from Cargo.toml ==="
+          
+          # Try to get binary name from [[bin]] section first
+          BINARY_NAME=""
+          
+          if grep -q "^\[\[bin\]\]" Cargo.toml; then
+            echo "Found [[bin]] section"
+            # Extract name from [[bin]] section
+            BINARY_NAME=$(awk '
+              /^\[\[bin\]\]/ { in_bin = 1; next }
+              /^\[/ && !/^\[\[bin\]\]/ { in_bin = 0; next }
+              in_bin && /^name = / { 
+                gsub(/name = "|"/, ""); 
+                gsub(/[ \t\r\n]/, "");
+                print $0;
+                exit
+              }
+            ' Cargo.toml)
+          fi
+          
+          # Fallback to package name
+          if [[ -z "$BINARY_NAME" ]]; then
+            echo "No [[bin]] section or name found, using package name"
+            BINARY_NAME=$(grep "^name = " Cargo.toml | head -1 | sed 's/name = "//' | sed 's/"//' | tr -d ' ')
+          fi
+          
+          echo "Expected binary name: $BINARY_NAME"
+          echo "expected_name=$BINARY_NAME" >> $GITHUB_OUTPUT
+
       - name: Debug Cargo.toml
         run: |
           echo "=== Cargo.toml content ==="
           cat Cargo.toml
           echo "=========================="
           
-          echo "=== Checking binary configuration ==="
-          # Extract binary name from Cargo.toml
-          if grep -q "^\[\[bin\]\]" Cargo.toml; then
-            echo "Found [[bin]] section"
-            grep -A 5 "^\[\[bin\]\]" Cargo.toml || true
-          else
-            echo "No [[bin]] section found, using package name"
-            grep "^name = " Cargo.toml | head -1
-          fi
+          echo "Expected binary: ${{ steps.expected_binary.outputs.expected_name }}"
 
       - name: Build binary
         shell: bash
@@ -119,11 +144,56 @@ jobs:
               BINARY=$(find . -name "*.exe" | head -1 | sed 's|^./||')
             fi
           else
-            # Look for executable files, excluding those with hyphens (usually deps)
-            BINARY=$(find . -maxdepth 1 -type f -executable -not -name "*-*" | head -1 | sed 's|^./||')
+            # For Unix systems, look for files with executable permissions
+            # Use a more portable approach than -executable
+            BINARY=""
+          
+            # First try: look for files without hyphens (main binaries)
+            for file in *; do
+              if [[ -f "$file" && ! "$file" == *"-"* && -x "$file" ]]; then
+                BINARY="$file"
+                break
+              fi
+            done
+          
+            # Second try: look for any executable file
             if [[ -z "$BINARY" ]]; then
-              # Fallback: look for any executable
-              BINARY=$(find . -type f -executable | head -1 | sed 's|^./||')
+              for file in *; do
+                if [[ -f "$file" && -x "$file" ]]; then
+                  BINARY="$file"
+                  break
+                fi
+              done
+            fi
+          
+            # Third try: look for files that are likely binaries by checking if they're not text
+            if [[ -z "$BINARY" ]]; then
+              for file in *; do
+                if [[ -f "$file" && ! "$file" == *"."* ]]; then
+                  # Check if it's a binary file (not text)
+                  if file "$file" | grep -q -E "(executable|binary)"; then
+                    BINARY="$file"
+                    chmod +x "$file"  # Make sure it's executable
+                    break
+                  fi
+                fi
+              done
+            fi
+          
+            # Final fallback: use the expected binary name from Cargo.toml
+            if [[ -z "$BINARY" ]]; then
+              EXPECTED_NAME="${{ steps.expected_binary.outputs.expected_name }}"
+              echo "Trying expected binary name: $EXPECTED_NAME"
+          
+              if [[ -f "$EXPECTED_NAME" ]]; then
+                BINARY="$EXPECTED_NAME"
+                chmod +x "$EXPECTED_NAME"
+                echo "Found expected binary: $EXPECTED_NAME"
+              elif [[ -f "${EXPECTED_NAME}${{ matrix.suffix }}" ]]; then
+                BINARY="${EXPECTED_NAME}${{ matrix.suffix }}"
+                chmod +x "$BINARY" 2>/dev/null || true
+                echo "Found expected binary with suffix: $BINARY"
+              fi
             fi
           fi
           
@@ -131,6 +201,12 @@ jobs:
             echo "❌ No binary found!"
             echo "Available files:"
             ls -la
+            echo "File types:"
+            for f in *; do
+              if [[ -f "$f" ]]; then
+                echo "$f: $(file "$f" 2>/dev/null || echo 'unknown')"
+              fi
+            done
             exit 1
           fi
           
@@ -144,11 +220,17 @@ jobs:
           # Verify it's executable/runnable
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             echo "Binary info:"
-            file "$BINARY" || true
+            file "$BINARY" || echo "File command not available"
           else
             echo "Binary info:"
-            file "$BINARY" || true
+            file "$BINARY" || echo "File command not available"
             chmod +x "$BINARY"
+          
+            # Double-check it's executable
+            if [[ ! -x "$BINARY" ]]; then
+              echo "Warning: Binary may not be executable"
+              ls -la "$BINARY"
+            fi
           fi
 
       - name: Strip binary (Unix)
