@@ -5,10 +5,9 @@ on:
     tags:
       - 'v*'
 
-# Add permissions for the workflow
 permissions:
-  contents: write  # Required to create releases
-  packages: write  # Optional: for package publishing
+  contents: write
+  packages: write
 
 jobs:
   test:
@@ -17,28 +16,32 @@ jobs:
   build-release:
     needs: test
     strategy:
-      fail-fast: false  # Don't cancel other jobs if one fails
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             suffix: ""
-            archive: "tar.gz"
+            archive_cmd: "tar czf"
+            archive_ext: "tar.gz"
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             suffix: ".exe"
-            archive: "zip"
-          - os: macos-13  # Use Intel runner for x86_64
+            archive_cmd: "7z a"
+            archive_ext: "zip"
+          - os: macos-13
             target: x86_64-apple-darwin
             suffix: ""
-            archive: "tar.gz"
-          - os: macos-14  # Use Apple Silicon runner for aarch64
+            archive_cmd: "tar czf"
+            archive_ext: "tar.gz"
+          - os: macos-14
             target: aarch64-apple-darwin
             suffix: ""
-            archive: "tar.gz"
+            archive_cmd: "tar czf"
+            archive_ext: "tar.gz"
 
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30  # Set timeout to prevent hanging
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
@@ -58,120 +61,170 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-${{ matrix.target }}-cargo-
+            ${{ runner.os }}-cargo-
 
-      - name: Install cross-compilation tools (if needed)
-        shell: bash
+      - name: Debug Cargo.toml
         run: |
-          case "${{ matrix.target }}" in
-            aarch64-apple-darwin)
-              # Native compilation on Apple Silicon
-              ;;
-            x86_64-apple-darwin)
-              # Native compilation on Intel
-              ;;
-            x86_64-pc-windows-msvc)
-              # Native compilation on Windows
-              ;;
-            *)
-              # For other targets, might need cross
-              echo "Using native compilation for ${{ matrix.target }}"
-              ;;
-          esac
+          echo "=== Cargo.toml content ==="
+          cat Cargo.toml
+          echo "=========================="
+          
+          echo "=== Checking binary configuration ==="
+          # Extract binary name from Cargo.toml
+          if grep -q "^\[\[bin\]\]" Cargo.toml; then
+            echo "Found [[bin]] section"
+            grep -A 5 "^\[\[bin\]\]" Cargo.toml || true
+          else
+            echo "No [[bin]] section found, using package name"
+            grep "^name = " Cargo.toml | head -1
+          fi
 
-      - name: Build optimized binary
+      - name: Build binary
         shell: bash
         run: |
           echo "Building for target: ${{ matrix.target }}"
           
-          # Set additional flags for optimization
-          export CARGO_PROFILE_RELEASE_LTO=true
-          export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+          # Build with verbose output to see what's happening
+          RUST_BACKTRACE=1 cargo build --release --target ${{ matrix.target }} --verbose
           
-          # Build the binary
-          if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" && "${{ runner.arch }}" == "X64" ]]; then
-            # Cross-compile from Intel to Apple Silicon if needed
-            cargo build --release --target ${{ matrix.target }}
+          echo "=== Build completed, checking output ==="
+          
+          # List everything in the target directory
+          echo "Contents of target/${{ matrix.target }}/release/:"
+          ls -la target/${{ matrix.target }}/release/ || true
+          
+          # Look for any executable files
+          echo "=== Looking for executables ==="
+          find target/${{ matrix.target }}/release/ -type f -executable 2>/dev/null || true
+          
+          # On Windows, look for .exe files
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            echo "=== Looking for .exe files ==="
+            find target/${{ matrix.target }}/release/ -name "*.exe" 2>/dev/null || true
+          fi
+
+      - name: Identify binary name
+        shell: bash
+        id: binary_name
+        run: |
+          echo "=== Identifying actual binary name ==="
+          
+          cd target/${{ matrix.target }}/release/
+          
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            # Look for .exe files, excluding deps and build artifacts
+            BINARY=$(find . -maxdepth 1 -name "*.exe" -not -name "*-*" | head -1 | sed 's|^./||')
+            if [[ -z "$BINARY" ]]; then
+              # Fallback: look for any .exe file
+              BINARY=$(find . -name "*.exe" | head -1 | sed 's|^./||')
+            fi
           else
-            # Native compilation
-            cargo build --release --target ${{ matrix.target }}
+            # Look for executable files, excluding those with hyphens (usually deps)
+            BINARY=$(find . -maxdepth 1 -type f -executable -not -name "*-*" | head -1 | sed 's|^./||')
+            if [[ -z "$BINARY" ]]; then
+              # Fallback: look for any executable
+              BINARY=$(find . -type f -executable | head -1 | sed 's|^./||')
+            fi
           fi
           
-          # Verify the binary was created
+          if [[ -z "$BINARY" ]]; then
+            echo "❌ No binary found!"
+            echo "Available files:"
+            ls -la
+            exit 1
+          fi
+          
+          echo "✅ Found binary: $BINARY"
+          echo "binary_name=$BINARY" >> $GITHUB_OUTPUT
+          
+          # Get the base name without extension
+          BASE_NAME=$(basename "$BINARY" .exe)
+          echo "base_name=$BASE_NAME" >> $GITHUB_OUTPUT
+          
+          # Verify it's executable/runnable
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            ls -la target/${{ matrix.target }}/release/lsrs.exe
-            file target/${{ matrix.target }}/release/lsrs.exe
+            echo "Binary info:"
+            file "$BINARY" || true
           else
-            ls -la target/${{ matrix.target }}/release/lsrs
-            file target/${{ matrix.target }}/release/lsrs
+            echo "Binary info:"
+            file "$BINARY" || true
+            chmod +x "$BINARY"
           fi
 
       - name: Strip binary (Unix)
         if: matrix.os != 'windows-latest'
+        shell: bash
         run: |
-          # Only strip if the binary exists
-          if [ -f "target/${{ matrix.target }}/release/lsrs" ]; then
-            strip target/${{ matrix.target }}/release/lsrs
+          cd target/${{ matrix.target }}/release/
+          BINARY="${{ steps.binary_name.outputs.binary_name }}"
+          
+          if [[ -f "$BINARY" ]]; then
+            echo "Stripping $BINARY"
+            strip "$BINARY"
+            ls -la "$BINARY"
           else
-            echo "Binary not found for stripping"
+            echo "Binary $BINARY not found for stripping"
             exit 1
+          fi
+
+      - name: Test binary
+        shell: bash
+        run: |
+          cd target/${{ matrix.target }}/release/
+          BINARY="${{ steps.binary_name.outputs.binary_name }}"
+          
+          echo "Testing binary: $BINARY"
+          
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            ./"$BINARY" --version || ./"$BINARY" --help || echo "Binary exists but might not support --version/--help"
+          else
+            ./"$BINARY" --version || ./"$BINARY" --help || echo "Binary exists but might not support --version/--help"
           fi
 
       - name: Create release archive
         shell: bash
         run: |
-          echo "Creating archive for ${{ matrix.target }}"
+          cd target/${{ matrix.target }}/release/
           
-          # Create archive in root directory
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            cd target/${{ matrix.target }}/release
+          BINARY="${{ steps.binary_name.outputs.binary_name }}"
+          BASE_NAME="${{ steps.binary_name.outputs.base_name }}"
+          TARGET="${{ matrix.target }}"
           
-            # Verify Windows binary exists
-            if [[ ! -f "lsrs.exe" ]]; then
-              echo "Error: lsrs.exe not found"
-              ls -la
-              exit 1
-            fi
+          echo "Creating archive for binary: $BINARY (base: $BASE_NAME)"
           
-            # Create zip archive
-            if command -v 7z >/dev/null 2>&1; then
-              7z a ../../../lsrs-${{ matrix.target }}.zip lsrs.exe
-            else
-              # Fallback to PowerShell
-              powershell Compress-Archive -Path lsrs.exe -DestinationPath ../../../lsrs-${{ matrix.target }}.zip
-            fi
-            cd ../../..
-          else
-            cd target/${{ matrix.target }}/release
-          
-            # Verify Unix binary exists
-            if [[ ! -f "lsrs" ]]; then
-              echo "Error: lsrs binary not found"
-              ls -la
-              exit 1
-            fi
-          
-            # Create tar.gz archive
-            tar czf ../../../lsrs-${{ matrix.target }}.tar.gz lsrs
-            cd ../../..
+          if [[ ! -f "$BINARY" ]]; then
+            echo "❌ Binary $BINARY not found"
+            ls -la
+            exit 1
           fi
           
-          # Verify archive was created
+          # Create archive with consistent naming
+          ARCHIVE_NAME="${BASE_NAME}-${TARGET}.${{ matrix.archive_ext }}"
+          
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            if [[ -f "lsrs-${{ matrix.target }}.zip" ]]; then
-              ls -la lsrs-${{ matrix.target }}.zip
-              echo "✅ Archive created successfully"
+            # Use PowerShell for Windows
+            powershell -Command "Compress-Archive -Path '$BINARY' -DestinationPath '../../../$ARCHIVE_NAME'"
+          else
+            # Use tar for Unix systems
+            tar czf "../../../$ARCHIVE_NAME" "$BINARY"
+          fi
+          
+          cd ../../..
+          
+          # Verify archive was created
+          if [[ -f "$ARCHIVE_NAME" ]]; then
+            echo "✅ Archive created: $ARCHIVE_NAME"
+            ls -la "$ARCHIVE_NAME"
+          
+            # Test archive contents
+            if [[ "${{ runner.os }}" == "Windows" ]]; then
+              powershell -Command "Get-Content -Path (Get-ChildItem '$ARCHIVE_NAME').FullName -Raw | Select-String '$BINARY'"
             else
-              echo "❌ Failed to create archive"
-              exit 1
+              tar -tzf "$ARCHIVE_NAME"
             fi
           else
-            if [[ -f "lsrs-${{ matrix.target }}.tar.gz" ]]; then
-              ls -la lsrs-${{ matrix.target }}.tar.gz
-              echo "✅ Archive created successfully"
-            else
-              echo "❌ Failed to create archive"
-              exit 1
-            fi
+            echo "❌ Archive creation failed"
+            exit 1
           fi
 
       - name: Upload release artifacts
@@ -179,8 +232,8 @@ jobs:
         with:
           name: release-${{ matrix.target }}
           path: |
-            lsrs-${{ matrix.target }}.tar.gz
-            lsrs-${{ matrix.target }}.zip
+            ${{ steps.binary_name.outputs.base_name }}-${{ matrix.target }}.tar.gz
+            ${{ steps.binary_name.outputs.base_name }}-${{ matrix.target }}.zip
           if-no-files-found: error
           retention-days: 1
 
@@ -201,7 +254,10 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ubuntu-latest-cargo-publish-${{ hashFiles('**/Cargo.lock') }}
+          key: publish-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Dry run publish first
+        run: cargo publish --dry-run --token ${{ secrets.CARGO_TOKEN }}
 
       - name: Publish to crates.io
         run: cargo publish --token ${{ secrets.CARGO_TOKEN }}
@@ -214,230 +270,209 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Get binary name from Cargo.toml
+        id: binary_info
+        run: |
+          # Extract binary name - try [[bin]] section first, then package name
+          if grep -q "^\[\[bin\]\]" Cargo.toml; then
+            BINARY_NAME=$(awk '/^\[\[bin\]\]/{flag=1; next} /^\[/{flag=0} flag && /^name = /{gsub(/[" ]/, "", $3); print $3}' Cargo.toml | head -1)
+          fi
+          
+          if [[ -z "$BINARY_NAME" ]]; then
+            BINARY_NAME=$(grep "^name = " Cargo.toml | head -1 | cut -d'"' -f2)
+          fi
+          
+          echo "Detected binary name: $BINARY_NAME"
+          echo "binary_name=$BINARY_NAME" >> $GITHUB_OUTPUT
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts/
 
-      - name: List all downloaded artifacts
-        run: |
-          echo "Downloaded artifacts:"
-          find artifacts/ -type f -exec ls -la {} \;
-
       - name: Organize artifacts
         run: |
-          # Move all archives to root level for easier access
+          echo "=== Downloaded artifacts ==="
+          find artifacts/ -type f -exec ls -la {} \;
+          
+          # Move all archives to root level
           find artifacts/ -name "*.tar.gz" -exec mv {} . \;
           find artifacts/ -name "*.zip" -exec mv {} . \;
           
-          echo "Final artifacts:"
-          ls -la *.tar.gz *.zip 2>/dev/null || echo "Some archives might be missing"
+          echo "=== Final artifacts ==="
+          ls -la *.tar.gz *.zip 2>/dev/null || echo "No archives found - this will cause the release to fail"
+          
+          # Count archives
+          ARCHIVE_COUNT=$(ls *.tar.gz *.zip 2>/dev/null | wc -l)
+          echo "Found $ARCHIVE_COUNT archives"
+          
+          if [[ $ARCHIVE_COUNT -eq 0 ]]; then
+            echo "❌ No archives found! Release will fail."
+            exit 1
+          fi
 
       - name: Create install scripts
         run: |
+          BINARY_NAME="${{ steps.binary_info.outputs.binary_name }}"
+          
           # Create install.sh
-          cat > install.sh << 'EOF'
+          cat > install.sh << EOF
           #!/bin/bash
           set -e
 
           # Configuration
           REPO="MohammedElMO/lsrs"
-          BINARY_NAME="lsrs"
+          BINARY_NAME="$BINARY_NAME"
           VERSION="${{ github.ref_name }}"
-          INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+          INSTALL_DIR="\${INSTALL_DIR:-/usr/local/bin}"
 
-          # Colors for output
+          # Colors
           RED='\033[0;31m'
           GREEN='\033[0;32m'
           YELLOW='\033[1;33m'
           NC='\033[0m'
 
-          log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
-          log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-          log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+          log_info() { echo -e "\${GREEN}[INFO]\${NC} \$1"; }
+          log_warn() { echo -e "\${YELLOW}[WARN]\${NC} \$1"; }
+          log_error() { echo -e "\${RED}[ERROR]\${NC} \$1"; }
 
-          # Detect platform
           detect_platform() {
-              local os=$(uname -s | tr '[:upper:]' '[:lower:]')
-              local arch=$(uname -m)
+              local os=\$(uname -s | tr '[:upper:]' '[:lower:]')
+              local arch=\$(uname -m)
 
-              case $arch in
+              case \$arch in
                   x86_64) arch="x86_64" ;;
                   arm64|aarch64) arch="aarch64" ;;
-                  *) log_error "Unsupported architecture: $arch" && exit 1 ;;
+                  *) log_error "Unsupported architecture: \$arch" && exit 1 ;;
               esac
 
-              case $os in
+              case \$os in
                   linux) echo "x86_64-unknown-linux-gnu" ;;
                   darwin)
-                      if [[ $arch == "aarch64" ]]; then
+                      if [[ \$arch == "aarch64" ]]; then
                           echo "aarch64-apple-darwin"
                       else
                           echo "x86_64-apple-darwin"
                       fi
                       ;;
-                  *) log_error "Unsupported OS: $os" && exit 1 ;;
+                  *) log_error "Unsupported OS: \$os" && exit 1 ;;
               esac
           }
 
-          # Main installation
           main() {
-              log_info "Installing $BINARY_NAME $VERSION..."
+              log_info "Installing \$BINARY_NAME \$VERSION..."
 
               for cmd in curl tar; do
-                  if ! command -v $cmd >/dev/null 2>&1; then
-                      log_error "Required command not found: $cmd"
+                  if ! command -v \$cmd >/dev/null 2>&1; then
+                      log_error "Required command not found: \$cmd"
                       exit 1
                   fi
               done
 
-              local platform=$(detect_platform)
-              local archive_name="lsrs-${platform}.tar.gz"
-              local download_url="https://github.com/$REPO/releases/download/$VERSION/$archive_name"
+              local platform=\$(detect_platform)
+              local archive_name="\$BINARY_NAME-\${platform}.tar.gz"
+              local download_url="https://github.com/\$REPO/releases/download/\$VERSION/\$archive_name"
 
-              log_info "Platform: $platform"
-              log_info "Downloading from: $download_url"
+              log_info "Platform: \$platform"
+              log_info "Downloading: \$download_url"
 
-              local tmp_dir=$(mktemp -d)
-              cd "$tmp_dir"
+              local tmp_dir=\$(mktemp -d)
+              cd "\$tmp_dir"
 
-              if ! curl -fsSL "$download_url" | tar xz; then
-                  log_error "Failed to download or extract $archive_name"
-                  log_error "Please check if the release exists at: $download_url"
+              if ! curl -fsSL "\$download_url" | tar xz; then
+                  log_error "Failed to download or extract \$archive_name"
                   exit 1
               fi
 
-              if [[ ! -f "$BINARY_NAME" ]]; then
-                  log_error "Binary $BINARY_NAME not found in archive"
+              # The binary should be the only file in the archive
+              local binary_file=\$(ls | head -1)
+              if [[ ! -f "\$binary_file" ]]; then
+                  log_error "No binary found in archive"
                   ls -la
                   exit 1
               fi
 
-              chmod +x "$BINARY_NAME"
+              chmod +x "\$binary_file"
 
-              log_info "Installing to $INSTALL_DIR..."
-              if [[ ! -w "$INSTALL_DIR" ]]; then
-                  if command -v sudo >/dev/null 2>&1; then
-                      sudo mv "$BINARY_NAME" "$INSTALL_DIR/"
-                  else
-                      log_error "No write permission to $INSTALL_DIR and sudo not available"
-                      log_error "Try: INSTALL_DIR=~/.local/bin curl -sSL ... | bash"
-                      exit 1
-                  fi
+              log_info "Installing to \$INSTALL_DIR..."
+              if [[ ! -w "\$INSTALL_DIR" ]]; then
+                  sudo mv "\$binary_file" "\$INSTALL_DIR/\$BINARY_NAME"
               else
-                  mv "$BINARY_NAME" "$INSTALL_DIR/"
+                  mv "\$binary_file" "\$INSTALL_DIR/\$BINARY_NAME"
               fi
 
-              cd - >/dev/null && rm -rf "$tmp_dir"
+              cd - >/dev/null && rm -rf "\$tmp_dir"
 
-              if command -v "$BINARY_NAME" >/dev/null 2>&1; then
-                  local version_output=$($BINARY_NAME --version 2>/dev/null || echo "unknown")
-                  log_info "✅ Installation successful! ($version_output)"
-                  log_info "Run '$BINARY_NAME --help' to get started"
+              if command -v "\$BINARY_NAME" >/dev/null 2>&1; then
+                  log_info "✅ Installation successful!"
+                  log_info "Run '\$BINARY_NAME --help' to get started"
               else
-                  log_warn "Binary installed but not found in PATH"
-                  log_warn "Add $INSTALL_DIR to your PATH:"
-                  log_warn "  export PATH=\"$INSTALL_DIR:\$PATH\""
-                  log_warn "Or install to a directory in PATH:"
-                  log_warn "  INSTALL_DIR=~/.local/bin curl -sSL ... | bash"
+                  log_warn "Binary installed but not in PATH"
+                  log_warn "Add \$INSTALL_DIR to PATH or run:"
+                  log_warn "  export PATH=\"\$INSTALL_DIR:\\\$PATH\""
               fi
           }
 
-          case "${1:-}" in
-              --help|-h)
-                  echo "Usage: $0 [options]"
-                  echo "Environment Variables:"
-                  echo "  INSTALL_DIR    Installation directory (default: /usr/local/bin)"
-                  exit 0
-                  ;;
-              *)
-                  main "$@"
-                  ;;
-          esac
+          main "\$@"
           EOF
 
           # Create install.ps1
-          cat > install.ps1 << 'EOF'
-          param(
-              [string]$InstallDir = "$env:USERPROFILE\.local\bin",
-              [switch]$Help
-          )
+          cat > install.ps1 << EOF
+          param([string]\$InstallDir = "\$env:USERPROFILE\\.local\\bin")
 
-          if ($Help) {
-              Write-Host "Usage: install.ps1 [options]"
-              Write-Host "  -InstallDir <path>  Installation directory"
-              Write-Host "  -Help               Show this help"
-              exit 0
-          }
+          \$REPO = "MohammedElMO/lsrs"
+          \$BINARY_NAME = "$BINARY_NAME"
+          \$VERSION = "${{ github.ref_name }}"
 
-          $REPO = "MohammedElMO/lsrs"
-          $BINARY_NAME = "lsrs"
-          $VERSION = "${{ github.ref_name }}"
+          function Write-Info { param([string]\$Message); Write-Host "[INFO] \$Message" -ForegroundColor Green }
+          function Write-Error { param([string]\$Message); Write-Host "[ERROR] \$Message" -ForegroundColor Red }
 
-          function Write-Info { param([string]$Message); Write-Host "[INFO] $Message" -ForegroundColor Green }
-          function Write-Error { param([string]$Message); Write-Host "[ERROR] $Message" -ForegroundColor Red }
-          function Write-Warn { param([string]$Message); Write-Host "[WARN] $Message" -ForegroundColor Yellow }
+          Write-Info "Installing \$BINARY_NAME \$VERSION..."
 
-          Write-Info "Installing $BINARY_NAME $VERSION..."
+          \$platform = "x86_64-pc-windows-msvc"
+          \$archiveName = "\$BINARY_NAME-\$platform.zip"
+          \$downloadUrl = "https://github.com/\$REPO/releases/download/\$VERSION/\$archiveName"
 
-          $platform = "x86_64-pc-windows-msvc"
-          $archiveName = "lsrs-$platform.zip"
-          $downloadUrl = "https://github.com/$REPO/releases/download/$VERSION/$archiveName"
-
-          $tempDir = Join-Path $env:TEMP ([System.Guid]::NewGuid().ToString())
+          \$tempDir = Join-Path \$env:TEMP ([System.Guid]::NewGuid().ToString())
 
           try {
-              New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+              New-Item -ItemType Directory -Path \$tempDir -Force | Out-Null
           
-              Write-Info "Downloading from: $downloadUrl"
-              $archivePath = Join-Path $tempDir $archiveName
-          
-              Invoke-WebRequest -Uri $downloadUrl -OutFile $archivePath -ErrorAction Stop
-              Expand-Archive -Path $archivePath -DestinationPath $tempDir -Force
+              \$archivePath = Join-Path \$tempDir \$archiveName
+              Invoke-WebRequest -Uri \$downloadUrl -OutFile \$archivePath
+              Expand-Archive -Path \$archivePath -DestinationPath \$tempDir -Force
 
-              $binaryPath = Join-Path $tempDir "$BINARY_NAME.exe"
-              if (-not (Test-Path $binaryPath)) {
-                  Write-Error "Binary $BINARY_NAME.exe not found in archive"
-                  Get-ChildItem $tempDir
+              # Find the binary (should be the only .exe file)
+              \$binaryPath = Get-ChildItem -Path \$tempDir -Filter "*.exe" | Select-Object -First 1 -ExpandProperty FullName
+
+              if (-not \$binaryPath) {
+                  Write-Error "No binary found in archive"
                   exit 1
               }
 
-              if (-not (Test-Path $InstallDir)) {
-                  New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+              if (-not (Test-Path \$InstallDir)) {
+                  New-Item -ItemType Directory -Path \$InstallDir -Force | Out-Null
               }
 
-              $installPath = Join-Path $InstallDir "$BINARY_NAME.exe"
-              Copy-Item $binaryPath $installPath -Force
+              \$installPath = Join-Path \$InstallDir "\$BINARY_NAME.exe"
+              Copy-Item \$binaryPath \$installPath -Force
 
-              # Test the installation
-              try {
-                  $versionOutput = & $installPath --version 2>$null
-                  Write-Info "✅ Installation successful! ($versionOutput)"
-              } catch {
-                  Write-Info "✅ Installation successful!"
-              }
-          
-              Write-Info "Run '$BINARY_NAME --help' to get started"
-
-              # Check if in PATH
-              $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
-              if ($currentPath -notlike "*$InstallDir*") {
-                  Write-Warn "Install directory not in PATH"
-                  Write-Warn "Add to PATH: [Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ';$InstallDir', 'User')"
-              }
+              Write-Info "✅ Installation successful!"
+              Write-Info "Run '\$BINARY_NAME --help' to get started"
 
           } catch {
-              Write-Error "Installation failed: $($_.Exception.Message)"
+              Write-Error "Installation failed: \$(\$_.Exception.Message)"
               exit 1
           } finally {
-              if (Test-Path $tempDir) {
-                  Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+              if (Test-Path \$tempDir) {
+                  Remove-Item \$tempDir -Recurse -Force
               }
           }
           EOF
 
-          # Make install.sh executable
           chmod +x install.sh
+          
+          echo "Created install scripts for binary: $BINARY_NAME"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
@@ -473,22 +508,13 @@ jobs:
             ```
 
             ### Manual Download
-            Download the appropriate binary for your platform from the assets below:
-            - **Linux**: `lsrs-x86_64-unknown-linux-gnu.tar.gz`
-            - **Windows**: `lsrs-x86_64-pc-windows-msvc.zip`  
-            - **macOS Intel**: `lsrs-x86_64-apple-darwin.tar.gz`
-            - **macOS M1/M2**: `lsrs-aarch64-apple-darwin.tar.gz`
-            
+            Download the appropriate binary for your platform from the assets below and extract to your PATH.
+
             ### Custom Install Location
             
             **Linux/macOS:**
             ```bash
             INSTALL_DIR=~/.local/bin curl -sSL https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/install.sh | bash
-            ```
-            
-            **Windows:**
-            ```powershell
-            iwr https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/install.ps1 | iex -ArgumentList "-InstallDir C:\tools"
             ```
         env:
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
