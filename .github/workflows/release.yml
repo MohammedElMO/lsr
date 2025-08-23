@@ -17,22 +17,28 @@ jobs:
   build-release:
     needs: test
     strategy:
+      fail-fast: false  # Don't cancel other jobs if one fails
       matrix:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             suffix: ""
+            archive: "tar.gz"
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             suffix: ".exe"
-          - os: macos-latest
+            archive: "zip"
+          - os: macos-13  # Use Intel runner for x86_64
             target: x86_64-apple-darwin
             suffix: ""
-          - os: macos-latest
+            archive: "tar.gz"
+          - os: macos-14  # Use Apple Silicon runner for aarch64
             target: aarch64-apple-darwin
             suffix: ""
+            archive: "tar.gz"
 
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30  # Set timeout to prevent hanging
 
     steps:
       - uses: actions/checkout@v4
@@ -42,32 +48,130 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Cache Rust dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      - name: Install cross-compilation tools (if needed)
+        shell: bash
+        run: |
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin)
+              # Native compilation on Apple Silicon
+              ;;
+            x86_64-apple-darwin)
+              # Native compilation on Intel
+              ;;
+            x86_64-pc-windows-msvc)
+              # Native compilation on Windows
+              ;;
+            *)
+              # For other targets, might need cross
+              echo "Using native compilation for ${{ matrix.target }}"
+              ;;
+          esac
+
       - name: Build optimized binary
-        run: cargo build --release --target ${{ matrix.target }}
+        shell: bash
+        run: |
+          echo "Building for target: ${{ matrix.target }}"
+          
+          # Set additional flags for optimization
+          export CARGO_PROFILE_RELEASE_LTO=true
+          export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+          
+          # Build the binary
+          if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" && "${{ runner.arch }}" == "X64" ]]; then
+            # Cross-compile from Intel to Apple Silicon if needed
+            cargo build --release --target ${{ matrix.target }}
+          else
+            # Native compilation
+            cargo build --release --target ${{ matrix.target }}
+          fi
+          
+          # Verify the binary was created
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            ls -la target/${{ matrix.target }}/release/lsrs.exe
+            file target/${{ matrix.target }}/release/lsrs.exe
+          else
+            ls -la target/${{ matrix.target }}/release/lsrs
+            file target/${{ matrix.target }}/release/lsrs
+          fi
 
       - name: Strip binary (Unix)
         if: matrix.os != 'windows-latest'
-        run: strip target/${{ matrix.target }}/release/lsrs${{ matrix.suffix }}
+        run: |
+          # Only strip if the binary exists
+          if [ -f "target/${{ matrix.target }}/release/lsrs" ]; then
+            strip target/${{ matrix.target }}/release/lsrs
+          else
+            echo "Binary not found for stripping"
+            exit 1
+          fi
 
       - name: Create release archive
         shell: bash
         run: |
+          echo "Creating archive for ${{ matrix.target }}"
+          
           # Create archive in root directory
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             cd target/${{ matrix.target }}/release
-            7z a ../../../lsrs-${{ matrix.target }}.zip lsrs.exe
+          
+            # Verify Windows binary exists
+            if [[ ! -f "lsrs.exe" ]]; then
+              echo "Error: lsrs.exe not found"
+              ls -la
+              exit 1
+            fi
+          
+            # Create zip archive
+            if command -v 7z >/dev/null 2>&1; then
+              7z a ../../../lsrs-${{ matrix.target }}.zip lsrs.exe
+            else
+              # Fallback to PowerShell
+              powershell Compress-Archive -Path lsrs.exe -DestinationPath ../../../lsrs-${{ matrix.target }}.zip
+            fi
             cd ../../..
           else
             cd target/${{ matrix.target }}/release
+          
+            # Verify Unix binary exists
+            if [[ ! -f "lsrs" ]]; then
+              echo "Error: lsrs binary not found"
+              ls -la
+              exit 1
+            fi
+          
+            # Create tar.gz archive
             tar czf ../../../lsrs-${{ matrix.target }}.tar.gz lsrs
             cd ../../..
           fi
           
-          # Verify file exists
+          # Verify archive was created
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            ls -la lsrs-${{ matrix.target }}.zip
+            if [[ -f "lsrs-${{ matrix.target }}.zip" ]]; then
+              ls -la lsrs-${{ matrix.target }}.zip
+              echo "✅ Archive created successfully"
+            else
+              echo "❌ Failed to create archive"
+              exit 1
+            fi
           else
-            ls -la lsrs-${{ matrix.target }}.tar.gz
+            if [[ -f "lsrs-${{ matrix.target }}.tar.gz" ]]; then
+              ls -la lsrs-${{ matrix.target }}.tar.gz
+              echo "✅ Archive created successfully"
+            else
+              echo "❌ Failed to create archive"
+              exit 1
+            fi
           fi
 
       - name: Upload release artifacts
@@ -77,10 +181,13 @@ jobs:
           path: |
             lsrs-${{ matrix.target }}.tar.gz
             lsrs-${{ matrix.target }}.zip
+          if-no-files-found: error
+          retention-days: 1
 
   publish-crate:
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v4
@@ -88,12 +195,21 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache Rust dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ubuntu-latest-cargo-publish-${{ hashFiles('**/Cargo.lock') }}
+
       - name: Publish to crates.io
         run: cargo publish --token ${{ secrets.CARGO_TOKEN }}
 
   create-github-release:
-    needs: [ build-release, publish-crate ]
+    needs: [build-release, publish-crate]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v4
@@ -102,6 +218,20 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts/
+
+      - name: List all downloaded artifacts
+        run: |
+          echo "Downloaded artifacts:"
+          find artifacts/ -type f -exec ls -la {} \;
+
+      - name: Organize artifacts
+        run: |
+          # Move all archives to root level for easier access
+          find artifacts/ -name "*.tar.gz" -exec mv {} . \;
+          find artifacts/ -name "*.zip" -exec mv {} . \;
+          
+          echo "Final artifacts:"
+          ls -la *.tar.gz *.zip 2>/dev/null || echo "Some archives might be missing"
 
       - name: Create install scripts
         run: |
@@ -171,15 +301,29 @@ jobs:
               local tmp_dir=$(mktemp -d)
               cd "$tmp_dir"
 
-              if ! curl -L "$download_url" | tar xz; then
-                  log_error "Failed to download or extract"
+              if ! curl -fsSL "$download_url" | tar xz; then
+                  log_error "Failed to download or extract $archive_name"
+                  log_error "Please check if the release exists at: $download_url"
+                  exit 1
+              fi
+
+              if [[ ! -f "$BINARY_NAME" ]]; then
+                  log_error "Binary $BINARY_NAME not found in archive"
+                  ls -la
                   exit 1
               fi
 
               chmod +x "$BINARY_NAME"
 
+              log_info "Installing to $INSTALL_DIR..."
               if [[ ! -w "$INSTALL_DIR" ]]; then
-                  sudo mv "$BINARY_NAME" "$INSTALL_DIR/"
+                  if command -v sudo >/dev/null 2>&1; then
+                      sudo mv "$BINARY_NAME" "$INSTALL_DIR/"
+                  else
+                      log_error "No write permission to $INSTALL_DIR and sudo not available"
+                      log_error "Try: INSTALL_DIR=~/.local/bin curl -sSL ... | bash"
+                      exit 1
+                  fi
               else
                   mv "$BINARY_NAME" "$INSTALL_DIR/"
               fi
@@ -187,20 +331,44 @@ jobs:
               cd - >/dev/null && rm -rf "$tmp_dir"
 
               if command -v "$BINARY_NAME" >/dev/null 2>&1; then
-                  log_info "✅ Installation successful!"
+                  local version_output=$($BINARY_NAME --version 2>/dev/null || echo "unknown")
+                  log_info "✅ Installation successful! ($version_output)"
                   log_info "Run '$BINARY_NAME --help' to get started"
               else
-                  log_warn "Installed but not in PATH. Add $INSTALL_DIR to PATH or run:"
-                  log_warn "export PATH=\"$INSTALL_DIR:\$PATH\""
+                  log_warn "Binary installed but not found in PATH"
+                  log_warn "Add $INSTALL_DIR to your PATH:"
+                  log_warn "  export PATH=\"$INSTALL_DIR:\$PATH\""
+                  log_warn "Or install to a directory in PATH:"
+                  log_warn "  INSTALL_DIR=~/.local/bin curl -sSL ... | bash"
               fi
           }
 
-          main "$@"
+          case "${1:-}" in
+              --help|-h)
+                  echo "Usage: $0 [options]"
+                  echo "Environment Variables:"
+                  echo "  INSTALL_DIR    Installation directory (default: /usr/local/bin)"
+                  exit 0
+                  ;;
+              *)
+                  main "$@"
+                  ;;
+          esac
           EOF
 
           # Create install.ps1
           cat > install.ps1 << 'EOF'
-          param([string]$InstallDir = "$env:USERPROFILE\.local\bin")
+          param(
+              [string]$InstallDir = "$env:USERPROFILE\.local\bin",
+              [switch]$Help
+          )
+
+          if ($Help) {
+              Write-Host "Usage: install.ps1 [options]"
+              Write-Host "  -InstallDir <path>  Installation directory"
+              Write-Host "  -Help               Show this help"
+              exit 0
+          }
 
           $REPO = "MohammedElMO/lsrs"
           $BINARY_NAME = "lsrs"
@@ -208,6 +376,7 @@ jobs:
 
           function Write-Info { param([string]$Message); Write-Host "[INFO] $Message" -ForegroundColor Green }
           function Write-Error { param([string]$Message); Write-Host "[ERROR] $Message" -ForegroundColor Red }
+          function Write-Warn { param([string]$Message); Write-Host "[WARN] $Message" -ForegroundColor Yellow }
 
           Write-Info "Installing $BINARY_NAME $VERSION..."
 
@@ -216,35 +385,59 @@ jobs:
           $downloadUrl = "https://github.com/$REPO/releases/download/$VERSION/$archiveName"
 
           $tempDir = Join-Path $env:TEMP ([System.Guid]::NewGuid().ToString())
-          New-Item -ItemType Directory -Path $tempDir | Out-Null
 
           try {
+              New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+          
+              Write-Info "Downloading from: $downloadUrl"
               $archivePath = Join-Path $tempDir $archiveName
-              Invoke-WebRequest -Uri $downloadUrl -OutFile $archivePath
+          
+              Invoke-WebRequest -Uri $downloadUrl -OutFile $archivePath -ErrorAction Stop
               Expand-Archive -Path $archivePath -DestinationPath $tempDir -Force
+
+              $binaryPath = Join-Path $tempDir "$BINARY_NAME.exe"
+              if (-not (Test-Path $binaryPath)) {
+                  Write-Error "Binary $BINARY_NAME.exe not found in archive"
+                  Get-ChildItem $tempDir
+                  exit 1
+              }
 
               if (-not (Test-Path $InstallDir)) {
                   New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
               }
 
-              $binaryPath = Join-Path $tempDir "$BINARY_NAME.exe"
               $installPath = Join-Path $InstallDir "$BINARY_NAME.exe"
               Copy-Item $binaryPath $installPath -Force
 
-              Write-Info "✅ Installation successful!"
+              # Test the installation
+              try {
+                  $versionOutput = & $installPath --version 2>$null
+                  Write-Info "✅ Installation successful! ($versionOutput)"
+              } catch {
+                  Write-Info "✅ Installation successful!"
+              }
+          
               Write-Info "Run '$BINARY_NAME --help' to get started"
-          }
-          catch {
+
+              # Check if in PATH
+              $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
+              if ($currentPath -notlike "*$InstallDir*") {
+                  Write-Warn "Install directory not in PATH"
+                  Write-Warn "Add to PATH: [Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ';$InstallDir', 'User')"
+              }
+
+          } catch {
               Write-Error "Installation failed: $($_.Exception.Message)"
               exit 1
-          }
-          finally {
-              Remove-Item $tempDir -Recurse -Force
+          } finally {
+              if (Test-Path $tempDir) {
+                  Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+              }
           }
           EOF
 
-      - name: List artifacts (debug)
-        run: find artifacts/ -type f -ls
+          # Make install.sh executable
+          chmod +x install.sh
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
@@ -253,7 +446,12 @@ jobs:
           name: Release ${{ github.ref_name }}
           draft: false
           prerelease: false
-          files: "artifacts/**/*,install.sh,install.ps1"
+          fail_on_unmatched_files: true
+          files: |
+            *.tar.gz
+            *.zip
+            install.sh
+            install.ps1
           body: |
             ## Installation
 
@@ -280,5 +478,17 @@ jobs:
             - **Windows**: `lsrs-x86_64-pc-windows-msvc.zip`  
             - **macOS Intel**: `lsrs-x86_64-apple-darwin.tar.gz`
             - **macOS M1/M2**: `lsrs-aarch64-apple-darwin.tar.gz`
+            
+            ### Custom Install Location
+            
+            **Linux/macOS:**
+            ```bash
+            INSTALL_DIR=~/.local/bin curl -sSL https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/install.sh | bash
+            ```
+            
+            **Windows:**
+            ```powershell
+            iwr https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/install.ps1 | iex -ArgumentList "-InstallDir C:\tools"
+            ```
         env:
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
