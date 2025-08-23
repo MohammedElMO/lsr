@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 // Import functions from our library
 
-use lsr::core::{hello, say_hi};
+use lsrs::core::{hello, say_hi};
 
 #[derive(Parser)]
 #[command(name = "lsr")]

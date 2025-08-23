@@ -1,4 +1,4 @@
-use lsr::core::hello::{hello, say_hi};
+use lsrs::core::hello::{hello, say_hi};
 
 #[test]
 fn hello_test() {
@@ -6,7 +6,3 @@ fn hello_test() {
     assert!(result.contains("CLI"));
 }
 
-// #[test]
-// fn say_hi_test() {
-//     let result = say_hi();
-//     assert!(result.)

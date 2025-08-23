@@ -10,12 +10,12 @@ keywords = ["cli","npm", "rust", "napi"]
 
 # This is crucial - cdylib for Node.js, rlib for Rust crates
 [lib]
-name = "lsr"
+name = "lsrs"
 path = "src/lib.rs"
 
 # CLI binary
 [[bin]]
-name = "lsr"
+name = "lsrs"
 path = "src/cli/main.rs"
 
 [dependencies]
