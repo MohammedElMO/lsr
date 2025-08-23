@@ -1,11 +1,11 @@
 [package]
-name = "lsr_mo"
-version = "0.1.4"
+name = "lsrs"
+version = "0.1.0"
 edition = "2024"
 authors = ["Mohammed, Amrani amranimohamad040@gmail.com"]
 description = "A hello world CLI tool with Rust and Node.js bindings"
 license = "MIT"
-repository = "https://github.com/yourusername/lsr"
+repository = "https://github.com/MohammedElMO/lsrs"
 keywords = ["cli","npm", "rust", "napi"]
 
 # This is crucial - cdylib for Node.js, rlib for Rust crates
