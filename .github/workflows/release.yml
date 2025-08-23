@@ -1,4 +1,4 @@
-name: Release Crate + CLI(lsr)
+name: Release Crate + CLI(lsrs)
 
 on:
   push:
@@ -47,7 +47,7 @@ jobs:
 
       - name: Strip binary (Unix)
         if: matrix.os != 'windows-latest'
-        run: strip target/${{ matrix.target }}/release/lsr${{ matrix.suffix }}
+        run: strip target/${{ matrix.target }}/release/lsrs${{ matrix.suffix }}
 
       - name: Create release archive
         shell: bash
@@ -55,19 +55,19 @@ jobs:
           # Create archive in root directory
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             cd target/${{ matrix.target }}/release
-            7z a ../../../lsr-${{ matrix.target }}.zip lsr.exe
+            7z a ../../../lsrs-${{ matrix.target }}.zip lsrs.exe
             cd ../../..
           else
             cd target/${{ matrix.target }}/release
-            tar czf ../../../lsr-${{ matrix.target }}.tar.gz lsr
+            tar czf ../../../lsrs-${{ matrix.target }}.tar.gz lsrs
             cd ../../..
           fi
           
           # Verify file exists
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            ls -la lsr-${{ matrix.target }}.zip
+            ls -la lsrs-${{ matrix.target }}.zip
           else
-            ls -la lsr-${{ matrix.target }}.tar.gz
+            ls -la lsrs-${{ matrix.target }}.tar.gz
           fi
 
       - name: Upload release artifacts
@@ -75,8 +75,8 @@ jobs:
         with:
           name: release-${{ matrix.target }}
           path: |
-            lsr-${{ matrix.target }}.tar.gz
-            lsr-${{ matrix.target }}.zip
+            lsrs-${{ matrix.target }}.tar.gz
+            lsrs-${{ matrix.target }}.zip
 
   publish-crate:
     needs: test
@@ -111,7 +111,7 @@ jobs:
           set -e
 
           # Configuration
-          REPO="MohammedElMO/lsrs"  # Replace with your actual repo
+          REPO="MohammedElMO/lsrs"
           BINARY_NAME="lsrs"
           VERSION="${{ github.ref_name }}"
           INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
@@ -162,7 +162,7 @@ jobs:
               done
 
               local platform=$(detect_platform)
-              local archive_name="${BINARY_NAME}-${platform}.tar.gz"
+              local archive_name="lsrs-${platform}.tar.gz"
               local download_url="https://github.com/$REPO/releases/download/$VERSION/$archive_name"
 
               log_info "Platform: $platform"
@@ -202,8 +202,8 @@ jobs:
           cat > install.ps1 << 'EOF'
           param([string]$InstallDir = "$env:USERPROFILE\.local\bin")
 
-          $REPO = "your-username/lsr"
-          $BINARY_NAME = "lsr"
+          $REPO = "MohammedElMO/lsrs"
+          $BINARY_NAME = "lsrs"
           $VERSION = "${{ github.ref_name }}"
 
           function Write-Info { param([string]$Message); Write-Host "[INFO] $Message" -ForegroundColor Green }
@@ -212,7 +212,7 @@ jobs:
           Write-Info "Installing $BINARY_NAME $VERSION..."
 
           $platform = "x86_64-pc-windows-msvc"
-          $archiveName = "$BINARY_NAME-$platform.zip"
+          $archiveName = "lsrs-$platform.zip"
           $downloadUrl = "https://github.com/$REPO/releases/download/$VERSION/$archiveName"
 
           $tempDir = Join-Path $env:TEMP ([System.Guid]::NewGuid().ToString())
@@ -253,30 +253,32 @@ jobs:
           name: Release ${{ github.ref_name }}
           draft: false
           prerelease: false
-          files: |
-            artifacts/**/*
-            install.sh
-            install.ps1
+          files: "artifacts/**/*,install.sh,install.ps1"
           body: |
             ## Installation
+
+            ### Quick Install (Recommended)
+            
+            **Linux/macOS:**
+            ```bash
+            curl -sSL https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/install.sh | bash
+            ```
+            
+            **Windows (PowerShell):**
+            ```powershell
+            iwr https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/install.ps1 | iex
+            ```
 
             ### Via Cargo
             ```bash
             cargo install lsrs
             ```
 
-            ### Download Binary
+            ### Manual Download
             Download the appropriate binary for your platform from the assets below:
-            - **Linux**: `lsr-x86_64-unknown-linux-gnu.tar.gz`
-            - **Windows**: `lsr-x86_64-pc-windows-msvc.zip`  
-            - **macOS Intel**: `lsr-x86_64-apple-darwin.tar.gz`
-            - **macOS M1/M2**: `lsr-aarch64-apple-darwin.tar.gz`
-            
-            ### Install scripts(install.sh(unix,mac),install.ps1 for windows)
-            ```bash
-             chmod +x ./install.sh
-              ./install.sh
-              same for ..sp1
-            ```
-          env:
-            GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+            - **Linux**: `lsrs-x86_64-unknown-linux-gnu.tar.gz`
+            - **Windows**: `lsrs-x86_64-pc-windows-msvc.zip`  
+            - **macOS Intel**: `lsrs-x86_64-apple-darwin.tar.gz`
+            - **macOS M1/M2**: `lsrs-aarch64-apple-darwin.tar.gz`
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
